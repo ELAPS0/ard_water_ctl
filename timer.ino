@@ -4,11 +4,13 @@
 #include "RTClib.h"
 RTC_DS1307 RTC;
 
-#define DS1307_I2C_ADDRESS 0x68
 
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 
-const byte outPin = 13; // выход на реле
+const byte outPin = 2; // выход на реле
+//подача HIGH на реле выключает (!) нагрузку
+//LOW - включает
+
 
 byte setMinClockOn; // 
 byte setHorClockOn;
@@ -25,76 +27,18 @@ byte key(){ //// для кнопок ЛСДшилда
     else return 0;  
 }
 
-/////////// часы ..
-/*
-byte decToBcd(byte val){
-  return ( (val/10*16) + (val%10) );
-}
-
-byte bcdToDec(byte val){
-  return ( (val/16*10) + (val%16) );
-}
-
-void setDateDs1307(byte second,        // 0-59
-                   byte minute,        // 0-59
-                   byte hour,          // 1-23
-                   byte dayOfWeek,     // 1-7
-                   byte dayOfMonth,    // 1-28/29/30/31
-                   byte month,         // 1-12
-                   byte year)          // 0-99
-{
-   Wire.beginTransmission(DS1307_I2C_ADDRESS);
-   Wire.write(0);
-   Wire.write(decToBcd(second));    
-   Wire.write(decToBcd(minute));
-   Wire.write(decToBcd(hour));     
-   Wire.write(decToBcd(dayOfWeek));
-   Wire.write(decToBcd(dayOfMonth));
-   Wire.write(decToBcd(month));
-   Wire.write(decToBcd(year));
-   Wire.endTransmission();
-}
-
-void getDateDs1307(byte *second,
-          byte *minute,
-          byte *hour,
-          byte *dayOfWeek,
-          byte *dayOfMonth,
-          byte *month,
-          byte *year)
-{
-
-  Wire.beginTransmission(DS1307_I2C_ADDRESS);
-  Wire.write(0);
-  Wire.endTransmission();
-
-  Wire.requestFrom(DS1307_I2C_ADDRESS, 7);
-
-  *second     = bcdToDec(Wire.read() & 0x7f);
-  *minute     = bcdToDec(Wire.read());
-  *hour       = bcdToDec(Wire.read() & 0x3f); 
-  *dayOfWeek  = bcdToDec(Wire.read());
-  *dayOfMonth = bcdToDec(Wire.read());
-  *month      = bcdToDec(Wire.read());
-  *year       = bcdToDec(Wire.read());
-}*/
-
-////
 void setClock(){ // установка часов
   byte pos = 1;
   char s0[16];
+ 
+  DateTime now = RTC.now(); 
   
-  //byte second, minute, hour, dayOfWeek, dayOfMonth, month, year; 
-  //getDateDs1307(&second, &minute, &hour, &dayOfWeek, &dayOfMonth, &month, &year);
+  lcd.clear();
+  lcd.blink();
 
-    DateTime now = RTC.now(); 
-  
-    lcd.clear();
-    lcd.blink();
-
-   while(key() != 1){ // крутим   цикл   
+  while(key() != 1){ // крутим   цикл   
     byte KEY = key(); // читаем состояние кнопок
-      delay(200);
+    delay(200);
 
       
     lcd.setCursor(1, 1);
@@ -128,28 +72,21 @@ void setClock(){ // установка часов
 }
 
 void setOnOff(){    
-  byte pos = 0;   
-    lcd.clear();
-    lcd.blink();
+  byte pos = 0;
+  char s0[16];
+  
+  lcd.clear();
+  lcd.blink();
 
-   while(key() != 1){ // крутим   цикл   
+  while(key() != 1){ // крутим   цикл   
     byte KEY = key(); // читаем состояние кнопок
       delay(200);
     lcd.setCursor(1, 1);
     lcd.print("set to save");
-    lcd.setCursor(0, 0);     // выводим инфу
-     if (setHorClockOn < 10) lcd.print("0");
-    lcd.print(setHorClockOn);
-    lcd.print(":");
-     if (setMinClockOn < 10) lcd.print("0"); 
-    lcd.print(setMinClockOn);  
-    lcd.print(" ");     
-     if (setHorClockOff < 10) lcd.print("0");
-    lcd.print(setHorClockOff);
-    lcd.print(":");
-     if (setMinClockOff < 10) lcd.print("0");
-    lcd.print(setMinClockOff); 
-    
+    lcd.setCursor(0, 0);
+    sprintf (s0, "%02i:%02i %02i:%02i",setHorClockOn, setMinClockOn,setHorClockOff, setMinClockOff );
+    lcd.print(s0);
+      
     lcd.setCursor(pos, 0); // устанавливаем курсор согласно позиции
     
     if (KEY == 5 && pos < 9) pos += 3; // крутим позицию
@@ -207,7 +144,7 @@ void menu(){
  
 void setup(){
   //отладка 
-  Serial.begin(9600);
+  
   
   RTC.begin();
   
@@ -216,7 +153,7 @@ void setup(){
   lcd.clear();
   
   pinMode(outPin, OUTPUT);
-  digitalWrite(outPin, LOW);
+  digitalWrite(outPin, HIGH);
   
   setMinClockOn = EEPROM.read(0);
   setHorClockOn = EEPROM.read(1);
@@ -225,17 +162,15 @@ void setup(){
   
   if (! RTC.isrunning()) {
     RTC.adjust(DateTime(__DATE__, __TIME__));
-Serial.println("RTC is NOT running. Set scketch compilling time");
-  }
-  
 
-  
+  }
 }
 
 void loop()
 {
-  int state = digitalRead(outPin);
+  
   char s0[16];
+  int state = digitalRead(outPin);
   
   //byte second, minute, hour, dayOfWeek, dayOfMonth, month, year;  
   //getDateDs1307(&second, &minute, &hour, &dayOfWeek, &dayOfMonth, &month, &year);
@@ -244,34 +179,32 @@ void loop()
   
   // обработка кнопок
   if (key() == 1) menu(); // если нажата селект
-  else if (key() == 3) digitalWrite(outPin, HIGH);
-  else if (key() == 4) digitalWrite(outPin, LOW);
+  else if (key() == 3) digitalWrite(outPin, LOW);
+  else if (key() == 4) digitalWrite(outPin, HIGH);
 
 
   // сравниваем время и управляем выходом// 
+  //логика такова: помимо таймера есть еще и ручное управление, поэтому 
+  //выключение происходит не всегда, а только в течении одной минуты, соответствующей таймеру
   if (setMinClockOff == now.minute() && setHorClockOff == now.hour()){
-    if ( state != LOW)
-    {
-      digitalWrite(outPin, LOW);
-      Serial.println("Out pin down");
+    if ( state != HIGH){
+      digitalWrite(outPin, HIGH);
     }
   }
   
   if (setMinClockOn == now.minute() && setHorClockOn == now.hour()){
-    if ( state == LOW)
-    {
-      digitalWrite(outPin, HIGH);
-      Serial.println("Out pin up");
+    if ( state == HIGH){
+      digitalWrite(outPin, LOW);
     }
   }
 
 
   
-  sprintf (s0, "%02i:%02i:%02i %c %02i:%02i", now.hour(), now.minute(), now.second(), state==LOW?'v':'^', setMinClockOn, setHorClockOn);
+  sprintf (s0, "%02i:%02i:%02i %c %02i:%02i", now.hour(), now.minute(), now.second(), state==LOW?'^':'v', setHorClockOn, setMinClockOn);
   lcd.setCursor(0,0);
   lcd.print(s0);
 
-  sprintf (s0, "%02i/%02i/%02i   %02i:%02i", now.day(), now.month(), now.year2(), setMinClockOff, setHorClockOff);
+  sprintf (s0, "%02i/%02i/%02i   %02i:%02i", now.day(), now.month(), now.year2(), setHorClockOff, setMinClockOff);
   lcd.setCursor(0,1);
   lcd.print(s0);
   
