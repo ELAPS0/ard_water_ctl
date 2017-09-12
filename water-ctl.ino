@@ -7,9 +7,37 @@ RTC_DS1307 RTC;
 
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 
-const byte outPin = 2; // выход на реле
+
+
+const byte pumpCtlPin = 2; // выход на реле насоса
 //подача HIGH на реле выключает (!) нагрузку
 //LOW - включает
+
+const byte valvCtlPin = 7; // выход на реле электромагнитного клапана
+//подача HIGH на реле выключает (!) нагрузку
+//LOW - включает
+
+//датчик потока
+const byte flowPin = 4;
+
+//количество жидкости выкачиваемое за одно включение (л)
+const short once_vol_limit = 400;
+//количество жидкости выкачиваемое за период работы таймера (л)
+const short total_vol_limit = 2000;
+//количество выкаченной жидкости за одно включение
+short current_vol = 0;
+//количество выкаченной жидкости за период
+short total_vol = 0;
+
+int 
+
+//состояние устройства  
+enum State {
+      UPLOAD,   //качает воду
+      PAUSED,   //приостановлено для набора воды    
+      STOPPED   //отдыхает
+    } state;
+
 
 
 byte setMinClockOn; // 
@@ -144,7 +172,7 @@ void menu(){
  
 void setup(){
   //отладка 
-  
+  Serial.begin(9600);
   
   RTC.begin();
   
@@ -152,8 +180,8 @@ void setup(){
   lcd.begin(16, 2);
   lcd.clear();
   
-  pinMode(outPin, OUTPUT);
-  digitalWrite(outPin, HIGH);
+  pinMode(pumpCtlPin, OUTPUT);
+  digitalWrite(pumpCtlPin, HIGH);
   
   setMinClockOn = EEPROM.read(0);
   setHorClockOn = EEPROM.read(1);
@@ -162,15 +190,18 @@ void setup(){
   
   if (! RTC.isrunning()) {
     RTC.adjust(DateTime(__DATE__, __TIME__));
-
   }
+
+  state = PAUSED;
 }
 
 void loop()
 {
   
   char s0[16];
-  int state = digitalRead(outPin);
+  int state = digitalRead(pumpCtlPin);
+
+  
   
   //byte second, minute, hour, dayOfWeek, dayOfMonth, month, year;  
   //getDateDs1307(&second, &minute, &hour, &dayOfWeek, &dayOfMonth, &month, &year);
@@ -179,27 +210,72 @@ void loop()
   
   // обработка кнопок
   if (key() == 1) menu(); // если нажата селект
-  else if (key() == 3) digitalWrite(outPin, LOW);
-  else if (key() == 4) digitalWrite(outPin, HIGH);
+  else if (key() == 3) digitalWrite(pumpCtlPin, LOW);
+  else if (key() == 4) digitalWrite(pumpCtlPin, HIGH);
 
 
   // сравниваем время и управляем выходом// 
   //логика такова: помимо таймера есть еще и ручное управление, поэтому 
   //выключение происходит не всегда, а только в течении одной минуты, соответствующей таймеру
   if (setMinClockOff == now.minute() && setHorClockOff == now.hour()){
-    if ( state != HIGH){
-      digitalWrite(outPin, HIGH);
-    }
+    if (STOPPED != state)
+      Serial.println("Switch to the stopped state");
+     
+    state = STOPPED;
   }
   
   if (setMinClockOn == now.minute() && setHorClockOn == now.hour()){
-    if ( state == HIGH){
-      digitalWrite(outPin, LOW);
+    if (UPLOAD != state){
+      Serial.println("Switch to the upload state");
+      state = UPLOAD;
+      total_vol = current_vol = 0;
     }
   }
 
+  switch (state){
+    case STOPPED:
+      if ( state != HIGH){
+        digitalWrite(pumpCtlPin, HIGH);
+        Serial.println("Pump has been stopped");
+      break;
+    case UPLOAD:
+      //устройство включено
+      if (total_vol < total_vol_limit){
+        //выкачали меньше чем нужно, продолжаем
+        if (
+        
+      }else{
+        //выкачали сколько нужно, выключаемся 
+        state = PAUSED;
+        Serial.println("Stop by total limit");       
+      }
+      
+       
+
+     if ( state == HIGH){
+      digitalWrite(pumpCtlPin, LOW);
+
+    case PAUSED:
+      
+      if (now.unixtime() - pause_start > pause_len){
+        if (setMinClockOff == now.minute() && setHorClockOff == now.hour()){
+          state == STOPPED;
+          Serial.println("Switch to the stopped state (1)");
+        }else{
+          current_vol = 0;
+          Serial.println("Pause finished. Switch to the upload state");
+          state = UPLOAD;
+        }
+      }
+    }
+    
+  }
+  
 
   
+
+
+    
   sprintf (s0, "%02i:%02i:%02i %c %02i:%02i", now.hour(), now.minute(), now.second(), state==LOW?'^':'v', setHorClockOn, setMinClockOn);
   lcd.setCursor(0,0);
   lcd.print(s0);
