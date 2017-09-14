@@ -35,11 +35,14 @@ const uint32_t total_vol_limit = 2000;
 //количество выкаченной жидкости за одно включение
 volatile uint32_t  current_vol = 0;
 //количество выкаченной жидкости за период
-uint32_t total_vol = 0;
+volatile uint32_t total_vol = 0;
 
 //Время последнего изменения состояния (в секундах от 1.01.2000 )
 uint32_t change_state_time = 0;
-
+//временной промежуток, через который открывается клапан в том случае, если поток не привышает значение drift_zero (в секундах)
+uint32_t flow_wait_time = 10;
+//значение счетчика потока, которое считается не отличимо от нуля
+uint32_t drift_zero = 10;
 
 //состояние устройства  
 enum State {
@@ -49,23 +52,17 @@ enum State {
     } state;
 
 
-
 byte setMinClockOn; // 
 byte setHorClockOn;
 byte setMinClockOff; // 
 byte setHorClockOff;
 
 
-volatile uint32_t flow = 0;
-
 //обработчик прерывания от датчика потока
 void flowChange(){
  current_vol++;
- 
+ total_vol++;
 }
-
-
-
 
 byte key(){ //// для кнопок ЛСДшилда
   int val = analogRead(0);
@@ -250,9 +247,7 @@ void setup(){
   pinMode(pumpCtlPin, OUTPUT);
   pinMode(valveCtlPin, OUTPUT);
   
-  
   attachInterrupt(digitalPinToInterrupt(flowPin), flowChange, RISING);
-
   
   setMinClockOn = EEPROM.read(0);
   setHorClockOn = EEPROM.read(1);
@@ -264,19 +259,16 @@ void setup(){
   }
 
   now = RTC.now();
+
+  pump_stop();
 }
 
 void loop()
 {
   
   char s0[16];
+ 
     
-  
-  //byte second, minute, hour, dayOfWeek, dayOfMonth, month, year;  
-  //getDateDs1307(&second, &minute, &hour, &dayOfWeek, &dayOfMonth, &month, &year);
-
-  
-  
   // обработка кнопок
   if (key() == 1) menu(); // если нажата селект
   else if (key() == 3) pump_upload();
@@ -287,48 +279,43 @@ void loop()
   //логика такова: помимо таймера есть еще и ручное управление, поэтому 
   //выключение происходит не всегда, а только в течении одной минуты, соответствующей таймеру
   if (setMinClockOff == now.minute() && setHorClockOff == now.hour()){
-    
+    pump_stop();
   }
   
   if (setMinClockOn == now.minute() && setHorClockOn == now.hour()){
-    if (UPLOAD != state){
-      Serial.println("Switch to the upload state");
-      state = UPLOAD;
-      total_vol = current_vol = 0;
-    }
+    pump_upload();
   }
 
   switch (state){
-    case STOPPED:
-      if ( state != HIGH){
-        digitalWrite(pumpCtlPin, HIGH);
-        Serial.println("Pump has been stopped");
-      }
-      break;
     case UPLOAD:
       //устройство включено
       if (total_vol < total_vol_limit){
         //выкачали меньше чем нужно, продолжаем
-        
-        
+        if (current_vol < once_vol_limit){
+          //выкачали меньше, чем разрешено за один подход
+          //проверим, качаем ли мы вообще
+          if (flow < drift_zero && now.secondstime() - change_state_time > flow_wait_time){
+            Serial.println("open valve");
+            digitalWrite(valveCtlPin, LOW);
+          }
+            
+        }else{
+          pump_pause();
+        }
       }else{
-        //выкачали сколько нужно, выключаемся 
-        state = PAUSED;
-        Serial.println("Stop by total limit");       
+        //выкачали сколько нужно, выключаемся
+        Serial.println("Rise flow limit"); 
+        pump_stop();       
       }
       if ( state == HIGH){
         digitalWrite(pumpCtlPin, LOW);
        break;
     case PAUSED:
-      
       if (now.secondstime() - pause_start > pause_len){
         if (setMinClockOff == now.minute() && setHorClockOff == now.hour()){
-          state == STOPPED;
-          Serial.println("Switch to the stopped state (1)");
+          pump_stop();
         }else{
-          current_vol = 0;
-          Serial.println("Pause finished. Switch to the upload state");
-          state = UPLOAD;
+          pump_upload();
         }
       }
     }
