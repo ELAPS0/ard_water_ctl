@@ -1,7 +1,7 @@
 #include <EEPROM.h>
 #include <Wire.h>
 #include <LiquidCrystal.h>
-#include "RTClib.h"
+#include <RTClib.h>
 RTC_DS1307 RTC;
 
 DateTime now;
@@ -43,6 +43,10 @@ uint32_t change_state_time = 0;
 uint32_t flow_wait_time = 10;
 //значение счетчика потока, которое считается не отличимо от нуля
 uint32_t drift_zero = 10;
+
+
+//длина паузы в секундах (ждем пока вода наберется)
+uint32_t pause_len = 3600;
 
 //состояние устройства  
 enum State {
@@ -198,7 +202,7 @@ void pump_stop()
   if (STOPPED != state)
   {
       Serial.println("Switch to the stopped state");
-      change_state_time = now.secondstime();
+      change_state_time = now.unixtime();
   }
   
   current_vol = total_vol = 0;
@@ -213,7 +217,7 @@ void pump_pause()
   if (PAUSED != state)
   {
       Serial.println("Switch to the paused state");
-      change_state_time = now.secondstime();
+      change_state_time = now.unixtime();
   }
   current_vol = 0;   
   state = PAUSED;
@@ -227,7 +231,7 @@ void pump_upload()
   if (UPLOAD != state)
   {
       Serial.println("Switch to the upload state");
-      change_state_time = now.secondstime();
+      change_state_time = now.unixtime();
   }
   
   state = UPLOAD;
@@ -294,7 +298,7 @@ void loop()
         if (current_vol < once_vol_limit){
           //выкачали меньше, чем разрешено за один подход
           //проверим, качаем ли мы вообще
-          if (flow < drift_zero && now.secondstime() - change_state_time > flow_wait_time){
+          if (current_vol < drift_zero && now.unixtime() - change_state_time > flow_wait_time){
             Serial.println("open valve");
             digitalWrite(valveCtlPin, LOW);
           }
@@ -307,11 +311,8 @@ void loop()
         Serial.println("Rise flow limit"); 
         pump_stop();       
       }
-      if ( state == HIGH){
-        digitalWrite(pumpCtlPin, LOW);
-       break;
     case PAUSED:
-      if (now.secondstime() - pause_start > pause_len){
+      if (now.unixtime() - change_state_time > pause_len){
         if (setMinClockOff == now.minute() && setHorClockOff == now.hour()){
           pump_stop();
         }else{
@@ -320,7 +321,7 @@ void loop()
       }
     }
     
-  }
+  
   
 
   
