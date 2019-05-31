@@ -2,36 +2,61 @@
 #include <Wire.h>
 #include <LiquidCrystal.h>
 #include <RTClib.h>
+#include "Digipin.h"
+#include "septik_rx.h"
+#include <bob_aux.h>
+
+
+#define _BOB_DEBUG
 RTC_DS1307 RTC;
 
 DateTime now;
 
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
-//управление скважным насосом
-//Задача: 
+//управление скважным насосом и контроль переполнения септика
+//про насос: 
 //Насос должен автоматически включаться в заданный период (ночью, для экономии электроэнергии) или вручную.
-//При включении должен за один цикл непрерывной работы выкачивать не более заданного количества литров. После достижения лимита - пауза и новый цикл.
+//При включении должен за один цикл непрерывной работы выкачивать не более заданного количества литров define . После достижения лимита - пауза и новый цикл.
 //Количество циклов и длинна пауз - настраиваемые.
 //Вода может поступать на два получателя - бочки и канава (для прокачки скважены). Переключение между получателями осуществляется электромакнитным клапаном.
 //При запуске клапан закрыт и вода поступает в бочки. Если во время подачи питания на насос поток не идет, то включаем клапан и льём в канаву.
+//
+//Про септик:
+//в нормальном состоянии с септика приходят пакеты проверки канала. в случае их отсутствия необходимо выключить питание на септике, отключить насос, поддерживающий давление в системе,
+//запретить использовать скважный насос 
+//электромагнитный клапан греется, когда открыт, поэтому включать его нужно тогда, когда через него идет вода.
 
-// выход на реле насоса
+
+#define DEEP_PUMP_PIN       2  //выход управления реле скважного насоса
+#define FLOW_SENSOR_PIN     3  //вход датчика поока
+#define RX_PIN              10 //вход приемника радиоканала от септика
+#define SEPTIK_POWER_PIN    11 //выход управления реле питания септика
+#define PREASURE_PUMP_PIN   12 //выход управления реле повышающего насоса
+#define VALVE_PIN           13  //выход управления электромагнитным клапаном для прокачки через септик
+
+#define FLOW_SENSOR_ENABLE  0 //используется датчик потока
+#define LEVEL_SENSOR_ENABLE 0 //используются датчики уровня 
+
+#define RX_FAIL_LIMIT   10
+SeptikRX septik(RX_PIN, RX_FAIL_LIMIT);
+
+// выход на реле скважного насоса
 //подача HIGH на реле выключает (!) нагрузку
 //LOW - включает
-const byte pumpCtlPin = 2; 
 
-// выход на реле электромагнитного клапана
-//подача HIGH на реле выключает (!) нагрузку
-//LOW - включает
-const byte valveCtlPin = 7; 
+//подключены на нормально разомкнутые реле, по умолчанию - питания нет
+Digipin deep_pump; 
+Digipin valve;
 
-//датчик потока
-const byte flowPin = 3;
+//подключены на нормально замкнутые реле, по умолчанию - питание подано
+Digipin septik_power;
+Digipin preasure_pump;
+
 
 //количество жидкости выкачиваемое за одно включение (л)
 const uint32_t once_vol_limit = 400;
 //количество жидкости выкачиваемое за период работы таймера (л)
-const uint32_t total_vol_limit = 2000;
+const uint32_t total_vol_limit = 1000;
 //количество выкаченной жидкости за одно включение
 volatile uint32_t  current_vol = 0;
 //количество выкаченной жидкости за период
@@ -47,15 +72,103 @@ uint32_t drift_zero = 10;
 
 //длина паузы в секундах (ждем пока вода наберется)
 uint32_t pause_len = 3600;
+//время начала паузы для пополнения скважены
+uint32_t pause_start_time;
 
-//состояние устройства  
-enum State {
-      UPLOAD,   //качает воду
-      PAUSED,   //приостановлено для набора воды    
-      STOPPED   //отдыхает
-    } state;
+/*
+ * состояние контроллера
+ */
+typedef void (*Way)();
+
+enum CTL_STATE {
+    CTL_IDLE,               //Все остановлено
+    CTL_TANK_UPLOAD,        //Набираются бочки
+    CTL_TANK_UPLOAD_PAUSE,  //пауза для того, чтобы не опусташать скважену полностью
+    CTL_UPLOAD_OUT,          //бочки полные, сливаем воду в канаву
+    CTL_SIZE
+};
 
 
+CTL_STATE current = CTL_IDLE;
+CTL_STATE new_state = CTL_IDLE;
+
+Way ctl_ways [CTL_SIZE][CTL_SIZE]; 
+
+
+void ctl_idle()
+{
+  BOB_TRACE("Idle");
+  deep_pump_stop();
+}
+
+void idle2tank_upload()
+{
+  BOB_TRACE("idle2tank_upload");
+  deep_pump_start();
+}
+
+void tank_upload2upload_pause()
+{
+  BOB_TRACE("tank_upload2upload_pause");
+  deep_pump_stop();
+  pause_start_time = now.unixtime();
+}
+
+void tank_upload2upload_out()
+{
+  BOB_TRACE("tank_upload2upload_out");
+  deep_pump_start();
+  valve.turn_on();
+  
+}
+
+void tank_upload2idle()
+{
+  BOB_TRACE("tank_upload2idle");
+  deep_pump_stop();
+}
+
+void upload_pause2idle()
+{
+  BOB_TRACE("upload_pause2idle");
+}
+
+void upload_pause2tank_upload()
+{
+  BOB_TRACE("upload_pause2tank_upload");
+  deep_pump_start();
+  valve.turn_off();
+}
+
+void upload_out2idle()
+{
+  BOB_TRACE("upload_out2idle");
+  deep_pump_stop();
+}
+
+void change_state()
+{
+  if (ctl_ways[current][new_state])
+  {
+    ctl_ways[current][new_state]();
+    current = new_state;
+  }
+}
+
+void ctl_init()
+{
+  memset(ctl_ways, sizeof(ctl_ways), sizeof(Way));
+  ctl_ways[CTL_IDLE][CTL_IDLE] = &ctl_idle;
+  ctl_ways[CTL_IDLE][CTL_TANK_UPLOAD] = &idle2tank_upload;
+  ctl_ways[CTL_TANK_UPLOAD][CTL_IDLE] = &tank_upload2idle;
+  ctl_ways[CTL_TANK_UPLOAD][CTL_TANK_UPLOAD_PAUSE] = &tank_upload2upload_pause;
+  ctl_ways[CTL_TANK_UPLOAD][CTL_UPLOAD_OUT] = &tank_upload2upload_out;
+  ctl_ways[CTL_TANK_UPLOAD_PAUSE][CTL_TANK_UPLOAD] = &upload_pause2tank_upload;
+  ctl_ways[CTL_TANK_UPLOAD_PAUSE][CTL_IDLE] = &upload_pause2idle;
+  ctl_ways[CTL_UPLOAD_OUT][CTL_IDLE] = &upload_out2idle;
+}
+
+//----------------------
 byte setMinClockOn; // 
 byte setHorClockOn;
 byte setMinClockOff; // 
@@ -193,48 +306,28 @@ void menu(){
 }  
 
 
-//работа с насосом
-void pump_stop()
+//работа со скважным насосом
+void deep_pump_stop()
 {
-  digitalWrite(pumpCtlPin, HIGH);
-  digitalWrite(valveCtlPin, HIGH);
-
-  if (STOPPED != state)
+  if (deep_pump.get_state() != DIGIPIN_OFF)
   {
-      Serial.println("Switch to the stopped state");
+      Serial.println("Deep pump stopped");
       change_state_time = now.unixtime();
   }
-  
+  deep_pump.turn_off();
+  valve.turn_off();
   current_vol = total_vol = 0;
-  state = STOPPED;
 }
 
-void pump_pause()
+void deep_pump_start()
 {
-  digitalWrite(pumpCtlPin, HIGH);
-  digitalWrite(valveCtlPin, HIGH);
-
-  if (PAUSED != state)
+  if (deep_pump.get_state() != DIGIPIN_ON)
   {
-      Serial.println("Switch to the paused state");
+      Serial.println("Deep pump started");
       change_state_time = now.unixtime();
-  }
-  current_vol = 0;   
-  state = PAUSED;
-}
-
-void pump_upload()
-{
-  digitalWrite(pumpCtlPin, LOW);
-
-
-  if (UPLOAD != state)
-  {
-      Serial.println("Switch to the upload state");
-      change_state_time = now.unixtime();
-  }
-  
-  state = UPLOAD;
+  } 
+  deep_pump.turn_on();
+  current_vol = total_vol = 0;
 }
 
 
@@ -248,10 +341,12 @@ void setup(){
   lcd.begin(16, 2);
   lcd.clear();
   
-  pinMode(pumpCtlPin, OUTPUT);
-  pinMode(valveCtlPin, OUTPUT);
-  
-  attachInterrupt(digitalPinToInterrupt(flowPin), flowChange, RISING);
+  deep_pump.init(DEEP_PUMP_PIN, "Deep pump", DIGIPIN_OFF, true); 
+  valve.init(VALVE_PIN, "Valve", DIGIPIN_OFF, true); 
+  septik_power.init(SEPTIK_POWER_PIN, "Septik power", DIGIPIN_ON, false); 
+  preasure_pump.init(PREASURE_PUMP_PIN, "Preasure pump", DIGIPIN_ON, false); 
+
+  attachInterrupt(digitalPinToInterrupt(FLOW_SENSOR_PIN), flowChange, RISING);
   
   setMinClockOn = EEPROM.read(0);
   setHorClockOn = EEPROM.read(1);
@@ -264,71 +359,85 @@ void setup(){
 
   now = RTC.now();
 
-  pump_stop();
+  //septik.init(RF433_RATE);
+  ctl_init();
+  Serial.println("setup done");
 }
 
 void loop()
 {
   
   char s0[16];
- 
+  now = RTC.now();
     
   // обработка кнопок
   if (key() == 1) menu(); // если нажата селект
-  else if (key() == 3) pump_upload();
-  else if (key() == 4) pump_stop();
-
+  else if (key() == 3 && (CTL_TANK_UPLOAD_PAUSE != current || CTL_UPLOAD_OUT != current)) new_state = CTL_TANK_UPLOAD; //пока так, когда будет отдельное управление клапаном - переделаю
+  else if (key() == 4) new_state = CTL_IDLE;
 
   // сравниваем время и управляем выходом// 
   //логика такова: помимо таймера есть еще и ручное управление, поэтому 
   //выключение происходит не всегда, а только в течении одной минуты, соответствующей таймеру
   if (setMinClockOff == now.minute() && setHorClockOff == now.hour()){
-    pump_stop();
+    new_state = CTL_IDLE;
   }
   
-  if (setMinClockOn == now.minute() && setHorClockOn == now.hour()){
-    pump_upload();
+  if (setMinClockOn == now.minute() && setHorClockOn == now.hour() && (CTL_TANK_UPLOAD_PAUSE != current || CTL_UPLOAD_OUT != current)){
+    new_state = CTL_TANK_UPLOAD;
   }
 
-  switch (state){
-    case UPLOAD:
-      //устройство включено
-      if (total_vol < total_vol_limit){
-        //выкачали меньше чем нужно, продолжаем
-        if (current_vol < once_vol_limit){
-          //выкачали меньше, чем разрешено за один подход
-          //проверим, качаем ли мы вообще
-          if (current_vol < drift_zero && now.unixtime() - change_state_time > flow_wait_time){
-            Serial.println("open valve");
-            digitalWrite(valveCtlPin, LOW);
-          }
-            
-        }else{
-          pump_pause();
-        }
-      }else{
-        //выкачали сколько нужно, выключаемся
-        Serial.println("Rise flow limit"); 
-        pump_stop();       
+
+  switch (current){
+    
+    case CTL_TANK_UPLOAD:
+      //обработать показания верхнего датчика уровня NYI.  
+      //обработка показаний датчика потока
+      if (current_vol > once_vol_limit){
+        // выкачили сколько нужно, переходим в состояние паузы, чтобы набралась скважена 
+        new_state = CTL_TANK_UPLOAD_PAUSE;
       }
-    case PAUSED:
-      if (now.unixtime() - change_state_time > pause_len){
-        if (setMinClockOff == now.minute() && setHorClockOff == now.hour()){
-          pump_stop();
-        }else{
-          pump_upload();
+      else{
+        //а может вообще не качаем?
+        //пока не подключен датчик - не используем
+        if (0 && current_vol < drift_zero && now.unixtime() - change_state_time > flow_wait_time){
+          //либо все сломалось, либо бочки полные. Сливаем в канаву
+          new_state = CTL_UPLOAD_OUT;
         }
+      }
+      break;
+
+    case CTL_TANK_UPLOAD_PAUSE:
+      if ( now.unixtime() - pause_start_time > pause_len)
+        new_state = CTL_TANK_UPLOAD;
+      break;
+  }
+    
+  change_state();
+
+/*
+  if (septik.check()){
+    if (!septik.is_state_normal()){
+      //все выключаем и ждем вмешательства оператора
+      Serial.println("Septik fail. Power off");
+      septik_power.turn_off();
+      preasure_pump.turn_off();
+      valve.turn_off();
+      deep_pump.turn_off();
+      while(1){
+        lcd.setCursor(0,0);
+        lcd.print("Septik failed. Power off");
+        sprintf (s0, "%02i/%02i/%02i   %02i:%02i", now.day(), now.month(), now.year2(), setHorClockOff, setMinClockOff);
+        lcd.setCursor(0,1);
+        lcd.print(s0);
+        delay(300);
       }
     }
-    
-  
-  
-
-  
+  } 
+*/
 
 
     
-  sprintf (s0, "%02i:%02i:%02i %c %02i:%02i", now.hour(), now.minute(), now.second(), state==LOW?'^':'v', setHorClockOn, setMinClockOn);
+  sprintf (s0, "%02i:%02i:%02i %c %02i:%02i", now.hour(), now.minute(), now.second(), CTL_TANK_UPLOAD==current || CTL_UPLOAD_OUT==current?'^':'v', setHorClockOn, setMinClockOn);
   lcd.setCursor(0,0);
   lcd.print(s0);
 
