@@ -11,7 +11,7 @@
 RTC_DS1307 RTC;
 
 DateTime now;
-
+  
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 //управление скважным насосом и контроль переполнения септика
 //про насос: 
@@ -27,18 +27,18 @@ LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 //электромагнитный клапан греется, когда открыт, поэтому включать его нужно тогда, когда через него идет вода.
 
 
-#define DEEP_PUMP_PIN       2  //выход управления реле скважного насоса
-#define FLOW_SENSOR_PIN     3  //вход датчика поока
-#define RX_PIN              10 //вход приемника радиоканала от септика
-#define SEPTIK_POWER_PIN    11 //выход управления реле питания септика
-#define PREASURE_PUMP_PIN   12 //выход управления реле повышающего насоса
-#define VALVE_PIN           13  //выход управления электромагнитным клапаном для прокачки через септик
+#define   DEEP_PUMP_PIN       2  //выход управления реле скважного насоса
+#define   FLOW_SENSOR_PIN     1  //вход датчика поока
+#define   RF433_RX_PIN        3  //вход приемника радиоканала от септика
+#define   SEPTIK_POWER_PIN    11 //выход управления реле питания септика
+#define   PREASURE_PUMP_PIN   12 //выход управления реле повышающего насоса
+#define   VALVE_PIN           13  //выход управления электромагнитным клапаном для прокачки через септик
 
 #define FLOW_SENSOR_ENABLE  0 //используется датчик потока
 #define LEVEL_SENSOR_ENABLE 0 //используются датчики уровня 
 
-#define RX_FAIL_LIMIT   10
-SeptikRX septik(RX_PIN, RX_FAIL_LIMIT);
+#define RX_FAIL_LIMIT   100
+SeptikRX septik(RF433_RX_PIN, RX_FAIL_LIMIT);
 
 // выход на реле скважного насоса
 //подача HIGH на реле выключает (!) нагрузку
@@ -118,7 +118,7 @@ void tank_upload2upload_out()
 {
   BOB_TRACE("tank_upload2upload_out");
   deep_pump_start();
-  valve.turn_on();
+  //valve.turn_on();
   
 }
 
@@ -137,7 +137,7 @@ void upload_pause2tank_upload()
 {
   BOB_TRACE("upload_pause2tank_upload");
   deep_pump_start();
-  valve.turn_off();
+  //valve.turn_off();
 }
 
 void upload_out2idle()
@@ -315,7 +315,7 @@ void deep_pump_stop()
       change_state_time = now.unixtime();
   }
   deep_pump.turn_off();
-  valve.turn_off();
+  //valve.turn_off();
   current_vol = total_vol = 0;
 }
 
@@ -333,11 +333,13 @@ void deep_pump_start()
 
 void setup(){
   //отладка 
-  Serial.begin(9600);
+  Serial.begin(57600);
   
   RTC.begin();
   
-  Wire.begin(); 
+  Wire.begin();
+  septik.init(RF433_RATE);
+
   lcd.begin(16, 2);
   lcd.clear();
   
@@ -359,14 +361,17 @@ void setup(){
 
   now = RTC.now();
 
-  //septik.init(RF433_RATE);
+  
+
   ctl_init();
   Serial.println("setup done");
 }
 
 void loop()
 {
+int br = 0;
   
+  DateTime septik_fail_time;
   char s0[16];
   now = RTC.now();
     
@@ -398,11 +403,13 @@ void loop()
       }
       else{
         //а может вообще не качаем?
+        #if FLOW_SENSOR_ENABLE
         //пока не подключен датчик - не используем
-        if (0 && current_vol < drift_zero && now.unixtime() - change_state_time > flow_wait_time){
+        if (current_vol < drift_zero && now.unixtime() - change_state_time > flow_wait_time){
           //либо все сломалось, либо бочки полные. Сливаем в канаву
           new_state = CTL_UPLOAD_OUT;
         }
+        #endif
       }
       break;
 
@@ -414,9 +421,9 @@ void loop()
     
   change_state();
 
-/*
   if (septik.check()){
     if (!septik.is_state_normal()){
+      septik_fail_time = now;
       //все выключаем и ждем вмешательства оператора
       Serial.println("Septik fail. Power off");
       septik_power.turn_off();
@@ -424,19 +431,17 @@ void loop()
       valve.turn_off();
       deep_pump.turn_off();
       while(1){
+        now = RTC.now();
         lcd.setCursor(0,0);
-        lcd.print("Septik failed. Power off");
-        sprintf (s0, "%02i/%02i/%02i   %02i:%02i", now.day(), now.month(), now.year2(), setHorClockOff, setMinClockOff);
+        lcd.print("Septik failed ! ");
+        sprintf (s0, "%02i:%02i:%02i %02i:%02i  ", now.hour(), now.minute(), now.second(), septik_fail_time.hour(), septik_fail_time.minute());
         lcd.setCursor(0,1);
         lcd.print(s0);
-        delay(300);
+        delay(1000);
       }
     }
   } 
-*/
 
-
-    
   sprintf (s0, "%02i:%02i:%02i %c %02i:%02i", now.hour(), now.minute(), now.second(), CTL_TANK_UPLOAD==current || CTL_UPLOAD_OUT==current?'^':'v', setHorClockOn, setMinClockOn);
   lcd.setCursor(0,0);
   lcd.print(s0);
