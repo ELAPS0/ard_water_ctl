@@ -30,14 +30,14 @@ LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 #define   DEEP_PUMP_PIN       2  //выход управления реле скважного насоса
 #define   FLOW_SENSOR_PIN     1  //вход датчика поока
 #define   RF433_RX_PIN        3  //вход приемника радиоканала от септика
-#define   SEPTIK_POWER_PIN    11 //выход управления реле питания септика
+#define   SEPTIK_POWER_PIN    0  //выход управления реле питания септика
 #define   PREASURE_PUMP_PIN   12 //выход управления реле повышающего насоса
 #define   VALVE_PIN           13  //выход управления электромагнитным клапаном для прокачки через септик
 
 #define FLOW_SENSOR_ENABLE  0 //используется датчик потока
 #define LEVEL_SENSOR_ENABLE 0 //используются датчики уровня 
 
-#define RX_FAIL_LIMIT   100
+#define RX_FAIL_LIMIT   60
 SeptikRX septik(RF433_RX_PIN, RX_FAIL_LIMIT);
 
 // выход на реле скважного насоса
@@ -118,7 +118,7 @@ void tank_upload2upload_out()
 {
   BOB_TRACE("tank_upload2upload_out");
   deep_pump_start();
-  //valve.turn_on();
+  valve.turn_on();
   
 }
 
@@ -137,7 +137,7 @@ void upload_pause2tank_upload()
 {
   BOB_TRACE("upload_pause2tank_upload");
   deep_pump_start();
-  //valve.turn_off();
+  valve.turn_off();
 }
 
 void upload_out2idle()
@@ -281,7 +281,7 @@ void setOnOff(){
 
    lcd.print("     Saved");
    delay(1500);
-}///
+}
  
 void menu(){
   lcd.clear();
@@ -315,7 +315,7 @@ void deep_pump_stop()
       change_state_time = now.unixtime();
   }
   deep_pump.turn_off();
-  //valve.turn_off();
+  valve.turn_off();
   current_vol = total_vol = 0;
 }
 
@@ -332,7 +332,7 @@ void deep_pump_start()
 
 
 void setup(){
-  //отладка 
+  //отладка отключена, так как используются ноги 0 и 1 
   Serial.begin(57600);
   
   RTC.begin();
@@ -437,6 +437,7 @@ int br = 0;
         sprintf (s0, "%02i:%02i:%02i %02i:%02i  ", now.hour(), now.minute(), now.second(), septik_fail_time.hour(), septik_fail_time.minute());
         lcd.setCursor(0,1);
         lcd.print(s0);
+        Serial.println(s0);
         delay(1000);
       }
     }
@@ -452,3 +453,4 @@ int br = 0;
   
   delay(200); // нужно для нармальной работы кнопок
 }
+
