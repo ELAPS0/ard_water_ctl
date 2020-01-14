@@ -2,6 +2,7 @@
 #include <Wire.h>
 #include <LiquidCrystal.h>
 #include <RTClib.h>
+#include "StableStatePin.h"
 #include "Digipin.h"
 #include "septik_rx.h"
 #include <bob_aux.h>
@@ -15,12 +16,7 @@ DateTime now;
 LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 //управление скважным насосом и контроль переполнения септика
 //про насос: 
-//Насос должен автоматически включаться в заданный период (ночью, для экономии электроэнергии) или вручную.
-//При включении должен за один цикл непрерывной работы выкачивать не более заданного количества литров define . После достижения лимита - пауза и новый цикл.
-//Количество циклов и длинна пауз - настраиваемые.
-//Вода может поступать на два получателя - бочки и канава (для прокачки скважены). Переключение между получателями осуществляется электромакнитным клапаном.
-//При запуске клапан закрыт и вода поступает в бочки. Если во время подачи питания на насос поток не идет, то включаем клапан и льём в канаву.
-//
+//Насос должен автоматически включаться в заданный период (ночью, для экономии электроэнергии), при понижнии уровня воды ниже критического в любое время или вручную.
 //Про септик:
 //в нормальном состоянии с септика приходят пакеты проверки канала. в случае их отсутствия необходимо выключить питание на септике, отключить насос, поддерживающий давление в системе,
 //запретить использовать скважный насос 
@@ -39,6 +35,13 @@ LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 
 #define RX_FAIL_LIMIT   60
 SeptikRX septik(RF433_RX_PIN, RX_FAIL_LIMIT);
+
+//датчики уровня воды в бочках
+#define LEVEL_SENSOR_DELAY  2000
+//датчик верхнего уровня, чтобы отключать подачу воды из скважены
+StableStatePin  hi_lvl; 
+//датчик нижнего уровня, чтобы включать подачу воды из скважены
+StableStatePin  low_lvl;
 
 // выход на реле скважного насоса
 //подача HIGH на реле выключает (!) нагрузку
@@ -388,28 +391,32 @@ int br = 0;
   }
   
   if (setMinClockOn == now.minute() && setHorClockOn == now.hour() && (CTL_TANK_UPLOAD_PAUSE != current || CTL_UPLOAD_OUT != current)){
-    new_state = CTL_TANK_UPLOAD;
+    if (hi_lvl.get_state() == STBLPIN_OFF)
+      new_state = CTL_TANK_UPLOAD;
   }
-
 
   switch (current){
     
     case CTL_TANK_UPLOAD:
-      //обработать показания верхнего датчика уровня NYI.  
-      //обработка показаний датчика потока
-      if (current_vol > once_vol_limit){
-        // выкачили сколько нужно, переходим в состояние паузы, чтобы набралась скважена 
-        new_state = CTL_TANK_UPLOAD_PAUSE;
-      }
+      //обработать показания верхнего датчика уровня NYI.
+      if (hi_lvl.get_state() == STBLPIN_ON)
+          new_state = CTL_IDLE;
       else{
-        //а может вообще не качаем?
-        #if FLOW_SENSOR_ENABLE
-        //пока не подключен датчик - не используем
-        if (current_vol < drift_zero && now.unixtime() - change_state_time > flow_wait_time){
-          //либо все сломалось, либо бочки полные. Сливаем в канаву
-          new_state = CTL_UPLOAD_OUT;
+        //обработка показаний датчика потока
+        if (current_vol > once_vol_limit){
+          // выкачили сколько нужно, переходим в состояние паузы, чтобы набралась скважена 
+          new_state = CTL_TANK_UPLOAD_PAUSE;
         }
-        #endif
+        else{
+          //а может вообще не качаем?
+          #if FLOW_SENSOR_ENABLE
+          //пока не подключен датчик - не используем
+          if (current_vol < drift_zero && now.unixtime() - change_state_time > flow_wait_time){
+            //либо все сломалось, либо бочки полные. Сливаем в канаву
+            new_state = CTL_UPLOAD_OUT;
+          }
+          #endif
+        }
       }
       break;
 
@@ -418,6 +425,9 @@ int br = 0;
         new_state = CTL_TANK_UPLOAD;
       break;
   }
+
+  if (low_lvl.get_state() == STBLPIN_ON)
+    new_state = CTL_TANK_UPLOAD;
     
   change_state();
 
