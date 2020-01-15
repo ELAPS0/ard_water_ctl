@@ -23,12 +23,14 @@ LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 //электромагнитный клапан греется, когда открыт, поэтому включать его нужно тогда, когда через него идет вода.
 
 
-#define   DEEP_PUMP_PIN       2  //выход управления реле скважного насоса
-#define   FLOW_SENSOR_PIN     1  //вход датчика поока
-#define   RF433_RX_PIN        3  //вход приемника радиоканала от септика
-#define   SEPTIK_POWER_PIN    0  //выход управления реле питания септика
-#define   PREASURE_PUMP_PIN   12 //выход управления реле повышающего насоса
-#define   VALVE_PIN           13  //выход управления электромагнитным клапаном для прокачки через септик
+#define   DEEP_PUMP_PIN         2  //выход управления реле скважного насоса
+#define   FLOW_SENSOR_PIN       1  //вход датчика поока
+#define   RF433_RX_PIN          3  //вход приемника радиоканала от септика
+#define   SEPTIK_POWER_PIN      0  //выход управления реле питания септика
+#define   PREASURE_PUMP_PIN     12 //выход управления реле повышающего насоса
+#define   VALVE_PIN             13 //выход управления электромагнитным клапаном для прокачки через септик
+#define   LOW_WATER_LEVEL_PIN   10 //вход от верхнего датчика уровня
+#define   HI_WATER_LEVEL_PIN    11 //вход от нижего датчика уровня
 
 #define FLOW_SENSOR_ENABLE  0 //используется датчик потока
 #define LEVEL_SENSOR_ENABLE 0 //используются датчики уровня 
@@ -37,7 +39,8 @@ LiquidCrystal lcd(8, 9, 4, 5, 6, 7);
 SeptikRX septik(RF433_RX_PIN, RX_FAIL_LIMIT);
 
 //датчики уровня воды в бочках
-#define LEVEL_SENSOR_DELAY  2000
+//задержка изменения состояния для датчиков уровня
+#define LEVEL_SENSOR_TOLERANCE  2000
 //датчик верхнего уровня, чтобы отключать подачу воды из скважены
 StableStatePin  hi_lvl; 
 //датчик нижнего уровня, чтобы включать подачу воды из скважены
@@ -343,6 +346,9 @@ void setup(){
   Wire.begin();
   septik.init(RF433_RATE);
 
+  hi_lvl.init(HI_WATER_LEVEL_PIN, "high level sensor", LEVEL_SENSOR_TOLERANCE);
+  low_lvl.init(LOW_WATER_LEVEL_PIN, "high level sensor", LEVEL_SENSOR_TOLERANCE);
+  
   lcd.begin(16, 2);
   lcd.clear();
   
@@ -430,7 +436,7 @@ int br = 0;
     new_state = CTL_TANK_UPLOAD;
     
   change_state();
-
+/*
   if (septik.check()){
     if (!septik.is_state_normal()){
       septik_fail_time = now;
@@ -452,7 +458,7 @@ int br = 0;
       }
     }
   } 
-
+*/
   sprintf (s0, "%02i:%02i:%02i %c %02i:%02i", now.hour(), now.minute(), now.second(), CTL_TANK_UPLOAD==current || CTL_UPLOAD_OUT==current?'^':'v', setHorClockOn, setMinClockOn);
   lcd.setCursor(0,0);
   lcd.print(s0);
